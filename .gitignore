@@ -1,0 +1,10 @@
+# Mac OS X cruft
+.DS_Store
+
+# Python intermediates
+*.py[cod]
+
+# Unit test / coverage reports
+.coverage
+.tox
+nosetests.xml
