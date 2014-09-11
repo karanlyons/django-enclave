@@ -245,9 +245,7 @@ class DataField(models.Field):
 EnclaveDataField = type(str('EnclaveDataField'), (EnclaveFieldMixin, DataField, object), {})
 
 
-django_fields = [getattr(models, s) for s in dir(models) if s.endswith('Field') and s != 'Field']
-
-for field in django_fields:
+for field in (getattr(models, s) for s in dir(models) if s.endswith('Field') and s not in ('OneToOneField', 'ManyToManyField', 'Field')):
 	if not hasattr(field, 'descriptor_class'):
 		enclave_field_name = str('Enclave{}'.format(field.__name__))
 		globals()[enclave_field_name] = type(enclave_field_name, (EnclaveFieldMixin, field, object), {})
