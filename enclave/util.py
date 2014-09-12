@@ -10,12 +10,9 @@ from hashlib import sha256
 import psycopg2
 from Crypto.Cipher import AES
 
-from django.conf import settings
-
 from .exceptions import EnclaveEncryptionError, EnclaveDecryptionError
 
 
-ENCLAVE_KEY = bytes(sha256(bytes(getattr(settings, 'ENCLAVE_KEY', settings.SECRET_KEY))).digest())
 MAPPING = {
 	'AutoField': 'serial',
 	'BinaryField': psycopg2.BINARY,
@@ -69,7 +66,7 @@ def encrypt(data, secret):
 		digest = AES.new(secret, AES.MODE_CBC, iv).encrypt(message)
 		payload = bytes(iv + digest)
 		
-		return bytes(hmac.new(ENCLAVE_KEY, payload, sha256).digest() + payload)
+		return bytes(hmac.new(secret, payload, sha256).digest() + payload)
 	
 	except TypeError as e:
 		raise EnclaveEncryptionError(e)
@@ -80,7 +77,7 @@ def decrypt(digest, secret, internal_type):
 		secret = bytes(sha256(secret).digest())
 		sig, payload = digest[:32], digest[32:]
 		
-		if sig != bytes(hmac.new(ENCLAVE_KEY, payload, sha256).digest()):
+		if sig != bytes(hmac.new(secret, payload, sha256).digest()):
 			raise ValueError('Bad signature.')
 		
 		else:
