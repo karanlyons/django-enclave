@@ -54,12 +54,17 @@ def encrypt(data, secret):
 	try:
 		secret = bytes(sha256(secret).digest())
 		iv = os.urandom(16)
+		null_flag = bytes('1' if data is None else '0')
+		
 		data = psycopg2.extensions.adapt(data).getquoted()
 		
 		if '::' in data:
-			data = data.split('::')[0][1:-1]
+			data = data.split('::')[0]
 		
-		message = pad(data if data else 'NULL')
+		if data[0] == "'" and data[-1] == "'":
+			data = data[1:-1]
+		
+		message = pad(bytes(null_flag + data))
 		
 		digest = AES.new(secret, AES.MODE_CBC, iv).encrypt(message)
 		payload = bytes(iv + digest)
@@ -84,11 +89,11 @@ def decrypt(digest, secret, internal_type):
 			data = AES.new(secret, AES.MODE_CBC, iv).decrypt(digest)
 			data = data[2:len(data) - int(data[0:2])]
 			
-			if data == 'NULL':
+			if data[0] == '1':
 				return None
 			
 			else:
-				return MAPPING[internal_type](data, psycopg2.extensions.cursor(psycopg2.extensions.connection(''), None))
+				return MAPPING[internal_type](data[1::], psycopg2.extensions.cursor(psycopg2.extensions.connection(''), None))
 	
 	except (TypeError, ValueError) as e:
 		raise EnclaveDecryptionError(e)
