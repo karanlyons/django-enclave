@@ -59,7 +59,7 @@ class EnclaveKey(object):
 				enclave_key = self.field.cache.get(self.cache_key)
 				
 				if enclave_key:
-					raw_enclave_key = util.decrypt(enclave_key, ENCLAVE_KEY)
+					raw_enclave_key = util.decrypt(enclave_key, ENCLAVE_KEY, self.field.get_internal_type())
 					setattr(self.instance, self.field.name, util.encrypt(raw_enclave_key, raw_password))
 					self.instance.save(update_fields=[self.field.name])
 				
@@ -80,7 +80,7 @@ class EnclaveKey(object):
 				self.instance.save(update_fields=[self.field.name])
 			
 			try:
-				raw_enclave_key = util.decrypt(self.field.to_python(self.instance.__dict__[self.field.name]), raw_password)
+				raw_enclave_key = util.decrypt(self.field.to_python(self.instance.__dict__[self.field.name]), raw_password, self.field.get_internal_type())
 				self.field.cache.set(self.cache_key, util.encrypt(raw_enclave_key, ENCLAVE_KEY))
 			
 			except exceptions.EnclaveDecryptionError:
@@ -144,11 +144,11 @@ class EnclaveFieldDescriptor(object):
 		
 		enclave_key = self.field.cache.get(cache_key)
 		
-		return util.decrypt(enclave_key, ENCLAVE_KEY) if enclave_key else None
+		return util.decrypt(enclave_key, ENCLAVE_KEY, self.field.get_internal_type()) if enclave_key else None
 	
 	def __get__(self, instance=None, owner=None):
 		try:
-			return self.field.to_python(util.decrypt(instance.__dict__[self.field.name], self.get_raw_enclave_key(instance)), saving=False)
+			return self.field.to_python(util.decrypt(instance.__dict__[self.field.name], self.get_raw_enclave_key(instance), self.field.get_internal_type()), saving=False)
 		
 		except:
 			return EncryptedData(instance.__dict__[self.field.name])

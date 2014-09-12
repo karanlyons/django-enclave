@@ -3,11 +3,11 @@
 
 from __future__ import division, absolute_import, print_function, unicode_literals
 
-import cPickle as pickle
 import hmac
 import os
 from hashlib import sha256
 
+import psycopg2
 from Crypto.Cipher import AES
 
 from django.conf import settings
@@ -15,44 +15,80 @@ from django.conf import settings
 from .exceptions import EnclaveEncryptionError, EnclaveDecryptionError
 
 
-BLOCK_SIZE = 32
+ENCLAVE_KEY = bytes(sha256(bytes(getattr(settings, 'ENCLAVE_KEY', settings.SECRET_KEY))).digest())
+MAPPING = {
+	'AutoField': 'serial',
+	'BinaryField': psycopg2.BINARY,
+	'BooleanField': psycopg2.extensions.BOOLEAN,
+	'CharField': psycopg2.STRING,
+	'CommaSeparatedIntegerField': psycopg2.STRING,
+	'DateField': psycopg2.extensions.DATE,
+	'DateTimeField': psycopg2.DATETIME,
+	'DecimalField': psycopg2.extensions.DECIMAL,
+	'FileField': psycopg2.STRING,
+	'FilePathField': psycopg2.STRING,
+	'FloatField': psycopg2.extensions.FLOAT,
+	'IntegerField': psycopg2.extensions.INTEGER,
+	'BigIntegerField': psycopg2.extensions.LONGINTEGER,
+	'IPAddressField': 'inet',
+	'GenericIPAddressField': 'inet',
+	'NullBooleanField': psycopg2.extensions.BOOLEAN,
+	'OneToOneField': psycopg2.extensions.INTEGER,
+	'PositiveIntegerField': psycopg2.extensions.INTEGER,
+	'PositiveSmallIntegerField': psycopg2.extensions.INTEGER,
+	'SlugField': psycopg2.STRING,
+	'SmallIntegerField': psycopg2.extensions.INTEGER,
+	'TextField': psycopg2.STRING,
+	'TimeField': psycopg2.extensions.TIME,
+}
+DUMMY_CURSOR = psycopg2.extensions.cursor(psycopg2.extensions.connection(''), None)
 
 
-def pad(message, block_size=BLOCK_SIZE):
-	pad_length = (block_size - (len(message) + 2)) % block_size
+def pad(message):
+	pad_length = (32 - (len(message) + 2)) % 32
 	
-	return bytes('{0:02d}'.format(pad_length)) + message + bytes('\x00') * pad_length
+	return bytes('{0:02d}'.format(pad_length) + message + '0' * pad_length)
 
 
-def encrypt(data, secret, mode=AES.MODE_CBC):
+def encrypt(data, secret):
 	try:
-		key = sha256(secret).digest()
+		secret = bytes(sha256(secret).digest())
 		iv = os.urandom(16)
-		message = pad(pickle.dumps(data))
+		data = psycopg2.extensions.adapt(data).getquoted()
 		
-		digest = AES.new(key, mode, iv).encrypt(message)
-		payload = iv + digest
+		if '::' in data:
+			data = data.split('::')[0][1:-1]
 		
-		return hmac.new(str(settings.SECRET_KEY), str(payload), sha256).digest() + payload
+		message = pad(data if data else 'NULL')
+		
+		digest = AES.new(secret, AES.MODE_CBC, iv).encrypt(message)
+		payload = bytes(iv + digest)
+		
+		return bytes(hmac.new(ENCLAVE_KEY, payload, sha256).digest() + payload)
 	
-	except (TypeError, pickle.PicklingError) as e:
+	except TypeError as e:
 		raise EnclaveEncryptionError(e)
 
 
-def decrypt(digest, secret, mode=AES.MODE_CBC):
+def decrypt(digest, secret, internal_type):
 	try:
-		key = sha256(secret).digest()
+		secret = bytes(sha256(secret).digest())
 		sig, payload = digest[:32], digest[32:]
 		
-		if sig != hmac.new(str(settings.SECRET_KEY), str(payload), sha256).digest():
+		if sig != bytes(hmac.new(ENCLAVE_KEY, payload, sha256).digest()):
 			raise ValueError('Bad signature.')
 		
 		else:
 			iv, digest = payload[:16], payload[16:]
 			
-			data = AES.new(key, mode, iv).decrypt(digest)
+			data = AES.new(secret, AES.MODE_CBC, iv).decrypt(digest)
+			data = data[2:len(data) - int(data[0:2])]
 			
-			return pickle.loads(data[2:len(data) - int(data[0:2])])
+			if data == 'NULL':
+				return None
+			
+			else:
+				return MAPPING[internal_type](data, psycopg2.extensions.cursor(psycopg2.extensions.connection(''), None))
 	
-	except (TypeError, ValueError, pickle.UnpicklingError) as e:
+	except (TypeError, ValueError) as e:
 		raise EnclaveDecryptionError(e)
