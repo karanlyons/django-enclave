@@ -67,10 +67,19 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+	
+CREATE OR REPLACE FUNCTION enclave_verify (digest bytea, secret bytea) RETURNS bool AS $$
+BEGIN
+	RAISE DEBUG 'Sig:         %', substring(digest, 0, 33);
+	RAISE DEBUG 'Payload:     %', substring(digest, 33);
+	RAISE DEBUG 'Sig:         %', hmac(substring(digest, 33), digest(secret, 'sha256'), 'sha256');
+	RETURN substring(digest, 0, 33) = hmac(substring(digest, 33), digest(secret, 'sha256'), 'sha256');
+END;
+$$ LANGUAGE plpgsql;
+
 
 CREATE OR REPLACE FUNCTION enclave_decrypt (digest bytea, secret bytea, type anyelement) RETURNS anyelement AS $$
 DECLARE
-	sig bytea;
 	payload bytea;
 	iv bytea;
 	data text;
@@ -78,43 +87,40 @@ DECLARE
 BEGIN
 	RAISE DEBUG 'Decrypting...';
 	RAISE DEBUG 'Full:        %', digest;
-	secret = digest(secret, 'sha256');
-	sig = substring(digest, 0, 33); -- Signature is first 32 bytes.
 	payload = substring(digest, 33);
-	RAISE DEBUG 'Sig:         %', sig;
 	RAISE DEBUG 'Payload:     %', payload;
 	
-	IF sig = hmac(payload, secret, 'sha256') THEN 
-		iv = substring(payload, 0, 17); -- IV is first 16 bytes.
-		digest = substring(payload, 17);
-		
-		RAISE DEBUG 'IV:          %', iv;
-		RAISE DEBUG 'Digest:      %', digest;
-		data = encode(decrypt_iv(digest, secret, iv, 'aes-cbc/pad:none'), 'escape'); -- bytea -> text.
-		RAISE DEBUG 'Padded Data: %', data;
-		RAISE DEBUG 'Pad Length:  %', CAST(substring(data, 0, 3) as integer);
-		data = substring(data, 3, length(data) - CAST(substring(data, 0, 3) as integer) - 2); -- First 2 characters are pad length.
-		RAISE DEBUG 'Data:        %', data;
-		
-		IF substring(data, 0, 2) = '1' THEN
-			RETURN null;
-		ELSE
-			result = substring(data, 2); -- Turn postgres text into actual postgres type.
-			RETURN result;
-		END IF;
-	ELSE
-		RAISE EXCEPTION 'Bad signature.' USING HINT = 'You probably don''t have the correct secret. This also should never happen.';
+	iv = substring(payload, 0, 17); -- IV is first 16 bytes.
+	digest = substring(payload, 17);
+	
+	RAISE DEBUG 'IV:          %', iv;
+	RAISE DEBUG 'Digest:      %', digest;
+	data = encode(decrypt_iv(digest, digest(secret, 'sha256'), iv, 'aes-cbc/pad:none'), 'escape'); -- bytea -> text.
+	RAISE DEBUG 'Padded Data: %', data;
+	RAISE DEBUG 'Pad Length:  %', CAST(substring(data, 0, 3) as integer);
+	data = substring(data, 3, length(data) - CAST(substring(data, 0, 3) as integer) - 2); -- First 2 characters are pad length.
+	RAISE DEBUG 'Data:        %', data;
+	
+	IF substring(data, 0, 2) = '1' THEN
 		RETURN null;
+	ELSE
+		result = substring(data, 2); -- Turn postgres text into actual postgres type.
+		RETURN result;
 	END IF;
 END;
 $$ LANGUAGE plpgsql;
 
 
-CREATE OR REPLACE FUNCTION enclave_verify (digest bytea, secret bytea) RETURNS bool AS $$
+CREATE OR REPLACE FUNCTION enclave_verify_and_decrypt (digest bytea, secret bytea, type anyelement) RETURNS anyelement AS $$
+DECLARE
+	result ALIAS FOR $0;
 BEGIN
-	RAISE DEBUG 'Sig:         %', substring(digest, 0, 33);
-	RAISE DEBUG 'Payload:     %', substring(digest, 33);
-	RAISE DEBUG 'Sig:         %', hmac(substring(digest, 33), digest(secret, 'sha256'), 'sha256');
-	RETURN substring(digest, 0, 33) = hmac(substring(digest, 33), digest(secret, 'sha256'), 'sha256');
+	IF enclave_verify(digest, secret) THEN
+		result = enclave_decrypt(digest, secret, type);
+		RETURN result;
+	ELSE
+		RAISE EXCEPTION 'Bad signature.' USING HINT = 'You probably don''t have the correct secret.';
+		RETURN null;
+	END IF;
 END;
 $$ LANGUAGE plpgsql;
