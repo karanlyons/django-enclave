@@ -184,8 +184,7 @@ class EnclaveFieldMixin(object):
 		super(EnclaveFieldMixin, self).__init__(*args, **kwargs)
 	
 	def deconstruct(self):
-		name, path, args, kwargs = super(EnclaveFieldMixin, self).deconstruct()
-		return(name, path, args, kwargs)
+		return super(EnclaveFieldMixin, self).deconstruct()
 	
 	def get_internal_type(self):
 		return "BinaryField"
