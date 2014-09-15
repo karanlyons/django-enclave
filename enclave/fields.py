@@ -4,7 +4,6 @@
 from __future__ import division, absolute_import, print_function, unicode_literals
 
 import os
-from base64 import b64decode, b64encode
 
 from django.db import models
 from django.conf import settings
@@ -215,14 +214,14 @@ class EnclaveFieldMixin(object):
 		return self.get_db_prep_value(value, connection=connection, prepared=False)
 	
 	def value_to_string(self, obj):
-		return b64encode(force_bytes(self._get_val_from_obj(obj))).decode('ascii')
+		return force_bytes(self._get_val_from_obj(obj))
 	
 	def to_python(self, value, saving=True):
 		if saving:
 			return value
 		
 		elif isinstance(value, six.text_type):
-			return super(EnclaveFieldMixin, self).to_python(six.memoryview(b64decode(force_bytes(value))))
+			return super(EnclaveFieldMixin, self).to_python(six.memoryview(force_bytes(value)))
 		
 		else:
 			return super(EnclaveFieldMixin, self).to_python(value)
