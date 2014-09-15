@@ -3,7 +3,7 @@
 --     Payload (?, AES-256 (CBC, PKCS#7 Padding))
 --         IV (16 bytes)
 --         Digest (?)
---             Data Flag (1 byte, \x00: Null, \x01: Data)
+--             Data Flag (1 byte, \x00: Null, \x01: Data. Disambiguates null from 'null' from ''.)
 --             Data (?)
 -- Usage:
 -- SELECT enclave_verify(enclave_encrypt(CAST('2014-07-23 08:41:52.004991-07' as timestamp), 'password'), 'password');
@@ -38,17 +38,17 @@ DECLARE
 BEGIN
 	iv = gen_random_bytes(16);
 	
-	IF data IS NOT DISTINCT FROM null THEN -- Convert postgres type to postgres string and prefix with data flag to disambiguate null from 'null' from ''.
+	IF data IS NOT DISTINCT FROM null THEN
 		byte_data = '\x00'::bytea;
 	ELSE
 		byte_data = '\x01'::bytea || decode(CAST(data as text), 'escape');
 	END IF;
 	
 	secret = digest(secret, 'sha256');
-	digest = encrypt_iv(byte_data, secret, iv, 'aes-cbc/pad:pkcs'); -- text -> bytea and encrypt.
+	digest = encrypt_iv(byte_data, secret, iv, 'aes-cbc/pad:pkcs');
 	payload = iv || digest;
 	sig = hmac(payload, secret, 'sha256');
-	RETURN sig || payload; -- Return sig(iv + payload) + IV + payload.
+	RETURN sig || payload;
 END;
 $$ LANGUAGE plpgsql;
 COMMENT ON FUNCTION enclave_encrypt (data anyelement, secret bytea) IS 'Encrypt data with a given secret, using AES-256 with CBC and PKCS#7 Padding, and signed with HMAC-SHA-256.';
@@ -71,10 +71,10 @@ DECLARE
 BEGIN
 	payload = substring(digest, 33);
 	
-	iv = substring(payload, 0, 17); -- IV is first 16 bytes.
+	iv = substring(payload, 0, 17);
 	digest = substring(payload, 17);
 	
-	data = decrypt_iv(digest, digest(secret, 'sha256'), iv, 'aes-cbc/pad:pkcs'); -- bytea -> text.
+	data = decrypt_iv(digest, digest(secret, 'sha256'), iv, 'aes-cbc/pad:pkcs');
 	
 	IF get_byte(data, 0) = 0 THEN
 		RETURN null;
