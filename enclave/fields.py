@@ -151,7 +151,6 @@ class EnclaveFieldDescriptor(object):
 		
 		except:
 			return EncryptedData(instance.__dict__[self.field.name])
-			return self.field.empty_values[0]
 	
 	def __set__(self, instance, value):
 		if isinstance(value, buffer):
