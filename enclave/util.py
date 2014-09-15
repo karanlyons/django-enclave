@@ -7,90 +7,88 @@ import hmac
 import os
 from hashlib import sha256
 
-import psycopg2
 from Crypto.Cipher import AES
+
+from django.db.backends.postgresql_psycopg2.base import DatabaseWrapper
 
 from .exceptions import EnclaveEncryptionError, EnclaveDecryptionError
 
 
-MAPPING = {
-	'AutoField': 'serial',
-	'BinaryField': psycopg2.BINARY,
-	'BooleanField': psycopg2.extensions.BOOLEAN,
-	'CharField': psycopg2.STRING,
-	'CommaSeparatedIntegerField': psycopg2.STRING,
-	'DateField': psycopg2.extensions.DATE,
-	'DateTimeField': psycopg2.DATETIME,
-	'DecimalField': psycopg2.extensions.DECIMAL,
-	'FileField': psycopg2.STRING,
-	'FilePathField': psycopg2.STRING,
-	'FloatField': psycopg2.extensions.FLOAT,
-	'IntegerField': psycopg2.extensions.INTEGER,
-	'BigIntegerField': psycopg2.extensions.LONGINTEGER,
-	'IPAddressField': 'inet',
-	'GenericIPAddressField': 'inet',
-	'NullBooleanField': psycopg2.extensions.BOOLEAN,
-	'OneToOneField': psycopg2.extensions.INTEGER,
-	'PositiveIntegerField': psycopg2.extensions.INTEGER,
-	'PositiveSmallIntegerField': psycopg2.extensions.INTEGER,
-	'SlugField': psycopg2.STRING,
-	'SmallIntegerField': psycopg2.extensions.INTEGER,
-	'TextField': psycopg2.STRING,
-	'TimeField': psycopg2.extensions.TIME,
-}
-DUMMY_CURSOR = psycopg2.extensions.cursor(psycopg2.extensions.connection(''), None)
+# We always use Django's Postgres interface as opposed to whichever database
+# engine the user is truly using. This allows the encrypted data to be database
+# independent, whilst still preserving the ability to do in database encryption
+# and decryption in Postgres with pgcrypto.
+DUMMY_CONNECTION = DatabaseWrapper({'OPTIONS': {}}, None)
 
 
 def pad(message):
-	pad_length = (32 - (len(message) + 2)) % 32
+	'''
+	PKCS#7 padding with a block size of 16 bytes.
 	
-	return bytes('{0:02d}'.format(pad_length) + message + '0' * pad_length)
+	'''
+	
+	pad_length = (16 - len(message)) % 16
+	
+	if pad_length == 0:
+		pad_length = 16
+	
+	return message + (chr(pad_length) * pad_length)
 
 
-def encrypt(data, secret):
+def encrypt(data, secret, field=None):
+	'''
+	Encrypt data with a given secret, using AES-256 with CBC and
+	PKCS#7 Padding, and signed with HMAC-SHA-256.
+	
+	If given a field, the data will first be conformed to Postgres' db
+	representation for that field.
+	
+	'''
+	
 	try:
-		secret = bytes(sha256(secret).digest())
+		secret = sha256(secret).digest()
 		iv = os.urandom(16)
-		null_flag = bytes('1' if data is None else '0')
+		data = '\x00' if data is None else '\x01' + data
 		
-		data = psycopg2.extensions.adapt(data).getquoted()
+		if field:
+			data = field.get_db_prep_save(data, DUMMY_CONNECTION)
 		
-		if '::' in data:
-			data = data.split('::')[0]
-		
-		if data[0] == "'" and data[-1] == "'":
-			data = data[1:-1]
-		
-		message = pad(bytes(null_flag + data))
+		message = pad(data)
 		
 		digest = AES.new(secret, AES.MODE_CBC, iv).encrypt(message)
-		payload = bytes(iv + digest)
+		payload = iv + digest
 		
-		return bytes(hmac.new(secret, payload, sha256).digest() + payload)
+		return hmac.new(secret, payload, sha256).digest() + payload
 	
 	except TypeError as e:
 		raise EnclaveEncryptionError(e)
 
 
-def decrypt(digest, secret, internal_type):
+def decrypt(digest, secret, field=None):
+	'''
+	Encrypt's inverse.
+	
+	'''
+	
 	try:
-		secret = bytes(sha256(secret).digest())
+		secret = sha256(secret).digest()
 		sig, payload = digest[:32], digest[32:]
 		
-		if sig != bytes(hmac.new(secret, payload, sha256).digest()):
+		if not hmac.compare_digest(sig, hmac.new(secret, payload, sha256).digest()):
 			raise ValueError('Bad signature.')
 		
 		else:
 			iv, digest = payload[:16], payload[16:]
 			
 			data = AES.new(secret, AES.MODE_CBC, iv).decrypt(digest)
-			data = data[2:len(data) - int(data[0:2])]
 			
-			if data[0] == '1':
+			if data[0] == '\x00':
 				return None
 			
 			else:
-				return MAPPING[internal_type](data[1::], psycopg2.extensions.cursor(psycopg2.extensions.connection(''), None))
+				data = data[1:-ord(data[-1])] # Remove padding
+				
+				return field.to_python(data) if field else data
 	
 	except (TypeError, ValueError) as e:
-		raise EnclaveDecryptionError(e)
+		raise e
