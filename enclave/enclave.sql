@@ -6,9 +6,9 @@
 --             Data Flag (1 byte, \x00: Null, \x01: Data. Disambiguates null from 'null' from ''.)
 --             Data (?)
 -- Usage:
--- SELECT enclave_verify(enclave_encrypt(CAST('2014-07-23 08:41:52.004991-07' as timestamp), 'password'), 'password');
--- SELECT enclave_decrypt(enclave_encrypt(CAST('2014-07-23 08:41:52.004991-07' as timestamp), 'password'), 'password', CAST(null as timestamp));
--- SELECT enclave_verify_and_decrypt(enclave_encrypt(CAST('2014-07-23 08:41:52.004991-07' as timestamp), 'password'), 'password', CAST(null as timestamp));
+-- SELECT enclave_verify(enclave_encrypt('2014-07-23 08:41:52.004991-07'::timestamp, 'password'), 'password');
+-- SELECT enclave_decrypt(enclave_encrypt('2014-07-23 08:41:52.004991-07'::timestamp, 'password'), 'password', null::timestamp);
+-- SELECT enclave_verify_and_decrypt(enclave_encrypt('2014-07-23 08:41:52.004991-07'::timestamp, 'password'), 'password', null::timestamp);
 
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -41,7 +41,11 @@ BEGIN
 	IF data IS NOT DISTINCT FROM null THEN
 		byte_data = '\x00'::bytea;
 	ELSE
-		byte_data = '\x01'::bytea || decode(CAST(data as text), 'escape');
+		IF pg_typeof(data)::text = 'bytea' THEN -- bytea can't be decoded as it already is.
+			byte_data = '\x01'::bytea || data;
+		ELSE
+			byte_data = '\x01'::bytea || decode(data::text, 'escape');
+		END IF;
 	END IF;
 	
 	secret = digest(secret, 'sha256');
@@ -79,7 +83,12 @@ BEGIN
 	IF get_byte(data, 0) = 0 THEN
 		RETURN null;
 	ELSE
-		result = substring(encode(data, 'escape'), 2); -- Turn postgres text into actual postgres type.
+		IF pg_typeof(type)::text = 'bytea' THEN -- We've already got the correct type.
+			result = substring(data, 2);
+		ELSE
+			result = substring(encode(data, 'escape'), 2); -- Turn postgres text into actual postgres type.
+		END IF;
+		
 		RETURN result;
 	END IF;
 END;
